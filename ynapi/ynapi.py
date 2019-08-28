@@ -60,6 +60,7 @@ class BudgetSession():
         return r_dict['data']['category']
 
     def construct_value_update_txn(self, account_id, corrective_amount, payee_id):
+        """Assembles a JSON transaction suitable to be uploaded to YNAB via API"""
         child = {}
         child["account_id"] = account_id
         child["date"] = datetime.date.today().strftime('%Y-%m-%d')
@@ -73,6 +74,7 @@ class BudgetSession():
         return json.loads(json.dumps(parent_json))
 
     def send_transaction_to_YNAB(self, budget_id, account_id, txn_json):
+        """Sends an assembled JSON transaction to the an account and budget on YNAB API"""
         url = 'https://api.youneedabudget.com/v1/budgets/{}/transactions'.format(budget_id)
         r = requests.post(url, params=self.params, json=txn_json)
         if r.status_code == 201:
