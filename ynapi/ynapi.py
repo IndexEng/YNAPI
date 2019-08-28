@@ -52,8 +52,8 @@ class BudgetSession():
         logging.debug(ynab_txn_dict_list)
         return ynab_txn_dict_list
 
-    def retrieve_budget_activity(self,  month, category_id):
-        url = "https://api.youneedabudget.com/v1/budgets/{}/months/{}/categories/{}".format(self.budget_id, month, category_id)
+    def retrieve_budget_activity(self,  month, budget_id, category_id):
+        url = "https://api.youneedabudget.com/v1/budgets/{}/months/{}/categories/{}".format(budget_id, month, category_id)
         r = requests.get(url, headers=self.header)
         r_dict = json.loads(r.text)
 
