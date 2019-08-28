@@ -1,4 +1,4 @@
-# ynapi
+# You Need An API (ynapi)
 A wrapper written in Python to access the YNAB RESTFUL API
 
 ## Configuring test case
