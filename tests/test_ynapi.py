@@ -1,7 +1,8 @@
-from context import ynapi
-import unittest
 import configparser
 import os
+import unittest
+
+from context import BudgetSession
 
 class APITest(unittest.TestCase):
 
@@ -13,17 +14,19 @@ class APITest(unittest.TestCase):
 
         self.API_token = config['YNAB']['API_token']
         self.budget_id = config['YNAB']['budget_id']
-        self.session = ynapi.BudgetSession(self.API_token)
+        self.session = BudgetSession(self.API_token)
 
     def test_accountlist_islist(self):
         account_list = self.session.retrieve_account_list(self.budget_id)
         self.assertTrue(isinstance(account_list, list))
         pass
 
-#    def test_txnlist_islist(self):
-#        txn_list = self.session.retrieve_txn_list(self.budget_id, self.acct_id)
-#        self.assertTrue(isinstance(account_list, list))
-
+    def test_txnlist_islist(self):
+        account_list = self.session.retrieve_account_list(self.budget_id)
+        first_account_id = account_list[0]['id']
+        txn_list = self.session.retrieve_txn_list(self.budget_id, first_account_id)
+        self.assertTrue(isinstance(txn_list, list))
+        pass
 
 #    def test_split(self):
 #        s = 'hello world'
