@@ -90,8 +90,7 @@ class BudgetSession():
         txn_amount = int(ofx_txn.amount * 1000)
 
         import_id = construct_import_id(txn_date, txn_amount)
-        print(import_id)
-
+        
         child = {}
         child["account_id"] = account_id
         child["date"] = txn_date
