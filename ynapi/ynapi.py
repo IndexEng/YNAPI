@@ -73,6 +73,29 @@ class BudgetSession():
         parent_json["transaction"] = child
         return json.loads(json.dumps(parent_json))
 
+    def construct_ofx_transaction(self, account_id, ofx_txn):
+        """Assembles a JSON transaction using an ofx txn object """
+        def construct_import_id(txn_date, txn_amount):
+            return "{}:{}:{}:1".format("YNAB", txn_amount, txn_date)
+
+        txn_date = ofx_txn.date.strftime('%Y-%m-%d')
+        txn_amount = int(ofx_txn.amount * 1000)
+
+        import_id = construct_import_id(txn_date, txn_amount)
+        print(import_id)
+
+        child = {}
+        child["account_id"] = account_id
+        child["date"] = txn_date
+        child["amount"] = txn_amount
+        child["memo"] = ofx_txn.memo
+        child["cleared"] = "cleared"
+        child["approved"] = False
+        child["import_id"] = import_id
+        parent_json = {}
+        parent_json["transaction"] = child
+        return json.loads(json.dumps(parent_json))
+
     def send_transaction_to_YNAB(self, budget_id, account_id, txn_json):
         """Sends an assembled JSON transaction to the an account and budget on YNAB API"""
         url = 'https://api.youneedabudget.com/v1/budgets/{}/transactions'.format(budget_id)
