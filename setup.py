@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="ynapi-indexeng",
-    version="0.0.5",
+    version="0.0.6",
     author="Thomas Wallin",
     author_email="thomas.wallin89@gmail.com",
     description="YNAB API wrapper for python",

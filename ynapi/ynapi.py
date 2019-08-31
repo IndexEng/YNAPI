@@ -81,7 +81,7 @@ class BudgetSession():
         parent_json["transaction"] = child
         return json.loads(json.dumps(parent_json))
 
-    def construct_ofx_transaction(self, account_id, ofx_txn):
+    def construct_ofx_child_transaction(self, account_id, ofx_txn):
         """Assembles a JSON transaction using an ofx txn object """
         def construct_import_id(txn_date, txn_amount):
             return "{}:{}:{}:1".format("YNAB", txn_amount, txn_date)
@@ -90,7 +90,7 @@ class BudgetSession():
         txn_amount = int(ofx_txn.amount * 1000)
 
         import_id = construct_import_id(txn_date, txn_amount)
-        
+
         child = {}
         child["account_id"] = account_id
         child["date"] = txn_date
@@ -99,8 +99,13 @@ class BudgetSession():
         child["cleared"] = "cleared"
         child["approved"] = False
         child["import_id"] = import_id
+
+        return json.loads(json.dumps(child))
+
+    def construct_transaction_list_json(self, transaction_list):
         parent_json = {}
-        parent_json["transaction"] = child
+        parent_json["transactions"] = transaction_list
+
         return json.loads(json.dumps(parent_json))
 
     def send_transaction_to_YNAB(self, budget_id, account_id, txn_json):

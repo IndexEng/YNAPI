@@ -1,8 +1,10 @@
+'''Script to synchronise bank accounts and budget accounts'''
 import configparser
 import logging
 import os
 import glob
 import codecs
+import time
 from ofxparse import OfxParser
 
 from context import BudgetSession
@@ -20,25 +22,29 @@ download_path = config['TEMP']['path']
 
 API_token = config['YNAB']['API_token']
 budget_id = config['YNAB']['budget_id']
-session = BudgetSession(API_token)
 
 list_of_ofx_paths = glob.glob('{}/*.ofx'.format(download_path))
 
-ofx_path = list_of_ofx_paths[0]
+session = BudgetSession(API_token)
 
-with codecs.open(ofx_path) as account_file:
-    acct_dat_raw = OfxParser.parse(account_file)
-    acct_dat = acct_dat_raw.accounts[0]
-    transactions = acct_dat.statement.transactions
-    transaction = transactions[0]
+for ofx_path in list_of_ofx_paths:
 
-    ynab_accounts = session.retrieve_account_list(budget_id)
+    with codecs.open(ofx_path) as account_file:
+        acct_dat_raw = OfxParser.parse(account_file)
+        acct_dat = acct_dat_raw.accounts[0]
 
-    account_id = ynab_accounts[7]['id']
+        account_number = acct_dat.account_id
 
-    txn_json = session.construct_ofx_transaction(account_id, transaction)
-    session.send_transaction_to_YNAB(budget_id, account_id, txn_json)
+        YNAB_account_list = session.retrieve_account_list(budget_id)
+        account_id = session.find_account_id(YNAB_account_list, account_number)
 
+        transactions = acct_dat.statement.transactions
 
+        json_txn_list = []
+        for ofx_txn in transactions:
+            json_txn = session.construct_ofx_child_transaction(account_id, ofx_txn)
 
-    print("{}, {}, {}".format(transaction.date,transaction.amount,transaction.memo))
+            json_txn_list.append(json_txn)
+
+        payload = session.construct_transaction_list_json(json_txn_list)
+        session.send_transaction_to_YNAB(budget_id, account_id, payload)
