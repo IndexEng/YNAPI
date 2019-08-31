@@ -1,4 +1,4 @@
-'''Script to synchronise bank accounts and budget accounts'''
+    '''Script to synchronise bank accounts and budget accounts'''
 import configparser
 import logging
 import os
