@@ -42,6 +42,10 @@ class BudgetSession():
             if account['note'] is not None:
                 if account_number in account['note']:
                     account_id = account['id']
+                else:
+                    account_id = ''
+            else:
+                account_id = ''
         return account_id
 
     def retrieve_txn_list(self, budget_id, acct_id):
