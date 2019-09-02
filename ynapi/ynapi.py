@@ -38,12 +38,11 @@ class BudgetSession():
 
     def find_account_id(self, account_list, account_number):
         '''Given an account list and full account number, retreives YNAB account id'''
+        account_id = ''
         for account in account_list:
             if account['note'] is not None:
                 if account_number in account['note']:
-                    account_id = account['id']
-        if account_id is None:
-            account_id = ''
+                    account_id = account['id']    
 
         return account_id
 
