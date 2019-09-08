@@ -42,7 +42,7 @@ class BudgetSession():
         for account in account_list:
             if account['note'] is not None:
                 if account_number in account['note']:
-                    account_id = account['id']    
+                    account_id = account['id']
 
         return account_id
 
@@ -121,3 +121,39 @@ class BudgetSession():
             logging.error("Upload to YNAB failed, status code {}".format(r.status_code))
             logging.debug(txn_json)
             logging.debug(r.json())
+
+    def retrieve_category_list(self, budget_id):
+        """Copies the category list from YNAB server into budget session"""
+        try:
+            url = "https://api.youneedabudget.com/v1/budgets/{}/categories".format(budget_id)
+        except:
+            logging.error("Something went wrong accessing the YNAB API")
+            sys.exit(1)
+        r = requests.get(url, headers=self.header)
+        if r.status_code is not 200:
+            #TODO : Make error match the actual status code description
+            logging.error("Something went wrong accessing YNAB account list, status code {}".format(r.status_code))
+            sys.exit(1)
+        ynab_category_dict_list = json.loads(r.text)['data']['category_groups']
+        self.category_list = []
+        for category_dict in ynab_category_dict_list:
+            self.category_list.append(CategoryGroup(category_dict['id'],
+                                                    category_dict['name'],
+                                                    category_dict['hidden'],
+                                                    category_dict['deleted'],
+                                                    category_dict['categories']))
+
+
+
+class CategoryGroup:
+    def __init__(self, id, name, hidden, deleted, categories_json):
+        self.id = id
+        self.name = name
+        self.hidden = hidden
+        self.deleted = deleted
+
+
+        self.categories_json = categories_json
+
+    def convert_categories(self):
+        '''Turns the JSON category data into a list of Category objects'''
