@@ -3,6 +3,7 @@ import json
 import logging
 import sys
 import datetime
+import pandas as pd
 
 class BudgetSession():
     """Is a temporary representation of your YNAB account. It is initially configured
@@ -20,9 +21,9 @@ class BudgetSession():
         self.header = {"Authorization" : bearer}
         self.params = {'access_token': API_token}
 
+
     def retrieve_account_list(self, budget_id):
         """Copies the account list from YNAB server into budget session"""
-
         try:
             url = "https://api.youneedabudget.com/v1/budgets/{}/accounts".format(budget_id)
         except:
@@ -36,6 +37,7 @@ class BudgetSession():
         ynab_account_dict_list = json.loads(r.text)['data']['accounts']
         return ynab_account_dict_list
 
+
     def find_account_id(self, account_list, account_number):
         '''Given an account list and full account number, retreives YNAB account id'''
         account_id = ''
@@ -46,8 +48,8 @@ class BudgetSession():
 
         return account_id
 
-    def retrieve_txn_list(self, budget_id, acct_id):
 
+    def retrieve_txn_list(self, budget_id, acct_id):
         try:
             url = "https://api.youneedabudget.com/v1/budgets/{}/accounts/{}/transactions".format(budget_id, acct_id)
         except:
@@ -62,12 +64,14 @@ class BudgetSession():
         logging.debug(ynab_txn_dict_list)
         return ynab_txn_dict_list
 
+
     def retrieve_budget_activity(self,  month, budget_id, category_id):
         url = "https://api.youneedabudget.com/v1/budgets/{}/months/{}/categories/{}".format(budget_id, month, category_id)
         r = requests.get(url, headers=self.header)
         r_dict = json.loads(r.text)
 
         return r_dict['data']['category']
+
 
     def construct_value_update_txn(self, account_id, corrective_amount, payee_id):
         """Assembles a JSON transaction suitable to be uploaded to YNAB via API"""
@@ -82,6 +86,7 @@ class BudgetSession():
         parent_json = {}
         parent_json["transaction"] = child
         return json.loads(json.dumps(parent_json))
+
 
     def construct_ofx_child_transaction(self, account_id, ofx_txn):
         """Assembles a JSON transaction using an ofx txn object """
@@ -104,11 +109,13 @@ class BudgetSession():
 
         return json.loads(json.dumps(child))
 
+
     def construct_transaction_list_json(self, transaction_list):
         parent_json = {}
         parent_json["transactions"] = transaction_list
 
         return json.loads(json.dumps(parent_json))
+
 
     def send_transaction_to_YNAB(self, budget_id, account_id, txn_json):
         """Sends an assembled JSON transaction to the an account and budget on YNAB API"""
@@ -121,6 +128,35 @@ class BudgetSession():
             logging.error("Upload to YNAB failed, status code {}".format(r.status_code))
             logging.debug(txn_json)
             logging.debug(r.json())
+
+
+    def retreive_account_balance(self, budget_id, account_id, at_date):
+        """Gets the current balance of account at given date"""
+        txns_json = self.retrieve_txn_list(budget_id, account_id)
+        txns_df = pd.DataFrame.from_dict(txns_json)
+        txns_df['date'] = pd.to_datetime(txns_df['date'])
+        before_date = txns_df['date'] < at_date
+
+        return txns_df[before_date]['amount'].sum() / 1000
+
+    def find_multiple_account_balance(self, budget_id, account_list, at_date):
+        """For a list of accounts, finds the total balance"""
+
+        total_balance = 0
+        for account_id in account_list:
+            total_balance += self.retreive_account_balance(budget_id, account_id, at_date)
+
+        return total_balance
+
+    def multiple_account_bal_history(self, budget_id, account_list, date_list):
+        """Given a list of accounts and dates, returns list of balances"""
+
+        balance_history = []
+        for at_date in date_list:
+            balance_at_date = self.find_multiple_account_balance(budget_id, account_list, at_date)
+            balance_history.append(balance_at_date)
+
+        return balance_history
 
     def retrieve_category_list(self, budget_id):
         """Copies the category list from YNAB server into budget session"""

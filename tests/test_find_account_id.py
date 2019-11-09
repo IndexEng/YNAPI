@@ -24,4 +24,6 @@ budget_id = config['YNAB']['budget_id']
 session = BudgetSession(API_token)
 
 acct_list = session.retrieve_account_list(budget_id)
+
+print(acct_list)
 print(session.find_account_id(acct_list, '555794334'))
