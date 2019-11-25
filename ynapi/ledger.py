@@ -1,39 +1,105 @@
-import os
 import json
 from datetime import datetime
+from datetime import timedelta as tdelta
 import logging
-import configparser
 import locale
 import requests
-import time
-import ynapi
-import sys
 import pandas as pd
-
+import time
 from ynapi.ynapi import BudgetSession
+locale.setlocale(locale.LC_ALL, '')
 
-locale.setlocale( locale.LC_ALL, '')
-
-
-class Transaction:
-    def __init__(self, txn_id, date, amount, memo):
-        self.txn_id = txn_id
-        self.date = datetime.strptime(date,'%Y-%m-%d')
-        self.amount = float(amount)
-        self.memo = memo
+# TODO Calculate value of account at a particular date
+# TODO Evaluate each account for all dates and create corrective transactions
+# TODO Create a value history for each account by date
+# TODO Evaluate security account value at a given date
 
 
-class SecurityTxn(Transaction):
-    def __init__(self, txn_id, date, amount, memo, action, units, price):
-        super().__init__(txn_id, date, amount, memo)
-        self.action = action
-        self.units = units
-        self.price = price
+class Book:
+
+    def __init__(self, ynab_api_token, av_key, budget_id, auto_populate=True):
+        self.budget_id = budget_id
+        self.session = BudgetSession(ynab_api_token)
+        self.unit_evaluator = Evaluation(av_key)
+        self.account_list = []
+        if auto_populate is True:
+            self.populate_account_lists()
+
+    def populate_account_lists(self):
+        """Creates account objects and stores them in an list of objects"""
+        json_account_list = self.session.retrieve_account_list(self.budget_id)
+        for account in json_account_list:
+            if account['note'] is not None:
+                if account['note'][:1] == "{":
+                    self.create_new_account(account)
+        logging.debug("Account list populated")
+
+    def create_new_account(self, account_json):
+        """Creates specialised account obj once passed json with meta data"""
+        meta = json.loads(account_json['note'])['meta']
+        if meta['asset'] == "cash":
+            acct_instance = Cash(account_json['id'], account_json['name'],
+                                 meta['asset'], meta['cls'],
+                                 meta['inst'], meta['acct_no'],
+                                 meta['country'], meta['currency'],
+                                 float(account_json['balance'])/1000,
+                                 meta['bsb'])
+            acct_instance.populate_cash_transaction_list(self.session,
+                                                         self.budget_id)
+        elif meta['asset'] == "sec":
+            acct_instance = Security(account_json['id'], account_json['name'],
+                                     meta['asset'], meta['cls'],
+                                     meta['inst'], meta['acct_no'],
+                                     meta['country'], meta['currency'],
+                                     float(account_json['balance'])/1000,
+                                     meta['HIN'], meta['symbol'],
+                                     meta['valuator'], meta['sector'])
+            acct_instance.populate_value_list(self.session, self.budget_id)
+        acct_instance.populate_transaction_list(self.session, self.budget_id)
+        self.account_list.append(acct_instance)
+
+    def asset_allocation(self, at_date, classifier):
+        allocation_dict = {}
+        for account in self.account_list:
+            value_at_date = round(account.ynab_value(at_date),2)
+            if classifier is "cls":
+                allocators = account.cls
+            elif classifier is "country":
+                allocators = account.country
+            elif (classifier is "sector") and \
+                 (account.__class__.__name__ is "Security"):
+                allocators = account.sector
+            else:
+                allocators = {}
+            for allocator, proportion in allocators.items():
+                if allocator in allocation_dict:
+                    allocation_dict[allocator] += value_at_date*proportion
+                else:
+                    allocation_dict[allocator] = value_at_date*proportion
+        return allocation_dict
+
+    def asset_allocation_percentage(self, allocation_dict):
+        total = sum([allocation for asset, allocation in allocation_dict.items() if asset != "Allocated"])
+        alloc_perc_dict = {}
+        for asset, allocation in allocation_dict.items():
+            if asset != "Allocated":
+                alloc_perc_dict[asset] = round(allocation/total,2)
+        return alloc_perc_dict
+
+
+    def net_worth(self, at_date):
+        networth = 0
+        asset_allocation = self.asset_allocation(at_date, 'cls')
+        for asset, allocation in asset_allocation.items():
+            if asset != "Allocated":
+                networth += allocation
+        return networth
 
 
 class Account:
 
-    def __init__(self, acct_id, name, asset, cls, inst, acct_no, country, balance):
+    def __init__(self, acct_id, name, asset, cls,
+                 inst, acct_no, country, currency, balance):
         self.acct_id = acct_id
         self.name = name
         self.asset = asset
@@ -41,245 +107,239 @@ class Account:
         self.inst = inst
         self.acct_no = acct_no
         self.country = country
+        self.currency = currency
         self.balance = balance
         self.current_value = balance
         self.transaction_list = []
+        logging.info("Account created called {}"
+                     .format(name))
 
-    def __str__(self):
+    def __repr__(self):
         return "Account Object ({}) - Name: {}".format(self.asset, self.name)
 
-    def get_balance_at_date(self, config, before_date):
-
-        try:
-            self.transaction_list
-        except AttributeError:
-            self.get_transaction_list(self.config, acct_id)
-        finally:
-            balance = float(0)
-            for transaction in self.transaction_list:
-                if transaction.tx_date <= before_date:
-                    balance += float(transaction.amount)
-
-        print("Balance of {} at {} is ${}".format(self.name, before_date, round(balance,2)))
-
-    def get_transaction_list(self, config, account_id):
-        session = BudgetSession(config['YNAB']['API_token'])
-        budget_id = config['YNAB']['budget_id']
-        logging.info("Transferring YNAB transactions from {} into transaction list".format(self.name))
-        ynab_txn_dict_list = session.retrieve_txn_list(budget_id, account_id)
-        for txn_dict in ynab_txn_dict_list:
-            txn_memo = txn_dict['memo']
-            if txn_memo != None:
-                if txn_memo[:1] == "{":
-                    try:
-                        meta = json.loads(txn_memo)['meta']
-                    except KeyError:
-                        logging.error(  "Meta tag not found; need to ensure all transactions"
-                                        " with metadata in the memo has a meta index in the"
-                                        " JSON code")
-
-                    txn_inst = SecurityTxn(txn_dict['id'], txn_dict['date'], txn_dict['amount'],
-                                        txn_dict['memo'], meta['action'], meta['units'],
-                                        meta['price'])
-
-                    logging.debug(txn_inst)
-                    self.transaction_list.append(txn_inst)
-            else:
-                self.transaction_list.append(Transaction(txn_dict['id'], txn_dict['date'],
-                                                txn_dict['amount'], txn_dict['memo']))
+    def populate_transaction_list(self, session, budget_id):
+        """Retrieves json txns and adds to account txns as txn objects"""
+        logging.debug('Populating transactions in {}'.format(self.name))
+        json_txn_list = session.retrieve_txn_list(budget_id, self.acct_id)
+        for json_txn in json_txn_list:
+            if json_txn['memo'] is not None:
+                if json_txn['memo'][:1] == '{':
+                    meta = json.loads(json_txn['memo'])['meta']
+                    txn_date = datetime.strptime(json_txn['date'], '%Y-%m-%d')
+                    if (meta['action'] == 'BUY'
+                        and json_txn['amount'] > 0) or \
+                        (meta['action'] == 'SELL'
+                         and json_txn['amount'] < 0):
+                        txn_instance = Order(json_txn['id'],
+                                             txn_date,
+                                             json_txn['amount']/1000,
+                                             json_txn['memo'], meta['action'],
+                                             meta['units'], meta['price'])
+                        self.transaction_list.append(txn_instance)
+                        logging.debug("Added a {} to txn list"
+                                      .format(txn_instance))
 
 
 class Cash(Account):
 
-    def __init__(self, acct_id, name, asset, cls, inst, acct_no, country, balance, bsb, currency):
-        super().__init__(acct_id, name, asset, cls, inst, acct_no, country, balance)
+    def __init__(self, acct_id, name, asset, cls, inst,
+                 acct_no, country, currency, balance, bsb):
+        super().__init__(acct_id, name, asset, cls, inst,
+                         acct_no, country, currency, balance)
         self.bsb = bsb
-        self.currency = currency
+
+    def __repr__(self):
+        return "Cash - {} (Current Balance: {} ${})"\
+                .format(self.name, self.currency, self.balance)
+
+    def populate_cash_transaction_list(self, session, budget_id):
+        """Retrieves json txns and adds to cash txns as txn objects"""
+        logging.debug('Populating cash transactions in {}'.format(self.name))
+        json_txn_list = session.retrieve_txn_list(budget_id, self.acct_id)
+        for json_txn in json_txn_list:
+            txn_date = datetime.strptime(json_txn['date'], '%Y-%m-%d')
+            txn_instance = Transaction(json_txn['id'],
+                                       txn_date,
+                                       json_txn['amount'] / 1000,
+                                       json_txn['memo'])
+            self.transaction_list.append(txn_instance)
+            logging.debug("Added a {} to cash txn list"
+                          .format(txn_instance))
+
+    def ynab_value(self, at_date):
+        """finds ynab cash account value at date"""
+        return sum(txn.amount for txn in self.transaction_list
+                   if txn.date <= at_date)
 
 
 class Security(Account):
 
-    def __init__(self, acct_id, name, asset, cls, inst, acct_no, country, balance, HIN, symbol, valuator):
-        super().__init__(acct_id, name, asset, cls, inst, acct_no, country, balance)
+    def __init__(self, acct_id, name, asset, cls, inst, acct_no,
+                 country, currency, balance, HIN, symbol, valuator, sector):
+        super().__init__(acct_id, name, asset, cls, inst,
+                         acct_no, country, currency, balance)
         self.HIN = HIN
         self.symbol = symbol
         self.valuator = valuator
-        self.unit_balance = 0
+        self.sector = sector
+        self.value_list = []
 
-    def get_order_list(self, config):
-        session = BudgetSession(config['YNAB']['API_token'])
-        raw_transaction_list = session.retrieve_account_transactions(self.acct_id)
-        refined_transaction_list = []
-        for raw_transaction in raw_transaction_list:
-            if raw_transaction['memo'] != None:
-                if raw_transaction['memo'][:1] == "{":
-                    transaction_meta = json.loads(raw_transaction['memo'])['meta']
-                    tx_date = datetime.strptime(raw_transaction['date'],'%Y-%m-%d')
-                    action = transaction_meta['action']
-                    amount = raw_transaction['amount']/1000
-                    units = transaction_meta['units']
-                    price = transaction_meta['price']
-                    refined_transaction_list.append(Order(tx_date, action, amount, units, price))
-        self.transaction_list = refined_transaction_list
+    def unit_balance(self, at_date):
+        """Calculate the units on hand at a particular date"""
+        orders = [txn for txn in self.transaction_list
+                  if txn.__class__.__name__ is "Order" and txn.date <= at_date]
+        units_bought = sum([order.units
+                            for order in orders if order.action == 'BUY'])
+        units_sold = sum([order.units
+                          for order in orders if order.action == 'SELL'])
+        logging.debug('{} was checked, {} units bought, {} units sold by {}'
+                      .format(self.name, units_bought, units_sold, at_date))
+        return units_bought - units_sold
 
-    def find_unit_balance(self, config):
-        session = BudgetSession(config['YNAB']['API_token'])
-        for transaction in self.transaction_list:
-            if transaction.__class__.__name__ == 'SecurityTxn':
-                if transaction.action == "BUY":
-                    self.unit_balance += transaction.units
-                elif transaction.action == "SELL":
-                    self.unit_balance -= transaction.units
+    def unit_price_aud(self, at_date, unit_evaluator):
+        """Calculate security unit price on a given date in AUD"""
+        exchange_rate = unit_evaluator.xrate_to_aud(at_date, self.currency)
+        if self.valuator == 'AV':
+            unit_price = unit_evaluator.av_unit_price(self.symbol, at_date)
+        elif self.valuator == 'MS':
+            unit_price = unit_evaluator.av_unit_price(self.symbol, at_date)
+        elif self.valuator == 'ABC':
+            # TODO Write ABC valuator
+            pass
 
-        logging.debug("{} has {} units on hand".format(self.name, self.unit_balance))
+        logging.debug("Price for a unit of {} is ${}({}) or AUD${}"
+                      .format(self.symbol, unit_price, self.currency,
+                              (exchange_rate * unit_price)))
+        return exchange_rate*unit_price
 
-class Allocation:
+    def populate_value_list(self, session, budget_id):
+        """Retrieves json txns and adds to cash txns as txn objects"""
+        logging.info('Populating security value txns in {}'.format(self.name))
+        json_txn_list = session.retrieve_txn_list(budget_id, self.acct_id)
+        for json_txn in json_txn_list:
+            txn_date = datetime.strptime(json_txn['date'], '%Y-%m-%d')
+            txn_instance = Transaction(json_txn['id'],
+                                       txn_date,
+                                       json_txn['amount'] / 1000,
+                                       json_txn['memo'])
+            self.value_list.append(txn_instance)
+            logging.debug("Added a {} to value list"
+                          .format(txn_instance))
 
-    def __init__(self, cls, total):
-        self.cls = cls
-        self.total = total
-
-
-class Book:
-
-    def __init__(self, config):
-        self.config = config
-        self.cash_account_list = []
-        self.security_account_list = []
-
-    def parse_ynab_accounts(self):
-        session = BudgetSession(self.config['YNAB']['API_token'])
-        ynab_account_list = session.retrieve_account_list(self.config['YNAB']['budget_id'])
-        for account in ynab_account_list:
-            if account['note'] != None:
-                if account['note'][:1] == "{":
-                    logging.debug('Dictionary detected, extracting meta data')
-                    account_meta = json.loads(account['note'])['meta']
-                    acct_id = account['id']
-                    name = account['name']
-                    inst = account_meta['inst']
-                    acct_no = account_meta['acct_no']
-                    asset = account_meta['asset']
-                    cls = account_meta['cls']
-                    country = account_meta['country']
-                    balance = float(account['balance'])/1000
-                    if asset == "cash":
-                        bsb = account_meta['bsb']
-                        currency = account_meta['currency']
-                        account_inst = Cash(acct_id, name, asset, cls, inst, acct_no, country, balance, bsb, currency)
-                        account_inst.get_transaction_list(self.config, acct_id)
-                        self.cash_account_list.append(account_inst)
-                    if asset == "sec":
-                        HIN = account_meta['HIN']
-                        symbol = account_meta['symbol']
-                        valuator = account_meta['valuator']
-                        account_inst = Security(acct_id, name, asset, cls, inst, acct_no, country, balance, HIN, symbol, valuator)
-                        account_inst.get_transaction_list(self.config, acct_id)
-                        account_inst.find_unit_balance(self.config)
-                        self.security_account_list.append(account_inst)
-
-    def calculate_asset_allocations(self):
-        self.asset_allocation = {}
-        try:
-            self.cash_account_list
-        except:
-            self.parse_ynab_accounts()
-        finally:
-            cash_total = 0
-            fixedinterest_total = 0
-            property_total = 0
-            shares_total = 0
-            for account in self.cash_account_list:
-                if account.cls == "cash":
-                    cash_total += account.balance
-            self.asset_allocation['cash'] = (Allocation("cash", total=cash_total))
-        try:
-            self.security_account_list
-        except:
-            self.parse_ynab_accounts()
-        finally:
-            for account in self.security_account_list:
-                if account.cls == "fixed_interest":
-                    fixedinterest_total += account.balance
-                elif account.cls == "property":
-                    property_total += account.balance
-                elif account.cls == "shares":
-                    shares_total += account.balance
-            self.asset_allocation['fixed_interest'] = Allocation("Fixed Interest", total=fixedinterest_total)
-            self.asset_allocation['property'] = Allocation("Property", total=property_total)
-            self.asset_allocation['shares'] = Allocation("Shares", total=shares_total)
-            self.total_assets = cash_total + fixedinterest_total + property_total + shares_total
-
-    def update_account_value(self):
-        av_session = AlphaVantage(self.config)
-        logging.info("Determining current value of accounts")
-        USDAUD = av_session.find_exchange_rate(from_currency="USD", to_currency="AUD")
-        for account in self.security_account_list:
-            if account.country == "Australia":
-                account.exchange_rate=1
-            elif account.country == "United States":
-                account.exchange_rate= USDAUD
-            if account.valuator == 'AV':
-                time.sleep(20)
-                logging.debug("Identifying unit price using Alpha Vantage")
-                unit_price = av_session.find_unit_price(account.symbol)
-                #TODO: DRY THIS
-                account_value = account.unit_balance * unit_price * account.exchange_rate
-                logging.info("{} is currently worth AUD ${}".format(account.name, account_value))
-                account.current_value = account_value
-            if account.valuator == 'MS':
-                logging.debug("Identifying unit price using Morningstar")
-                #TODO: Add morningstar fund number fields
-                unit_price = morningstar.find_unit_price(account.symbol)
-                #TODO: DRY THIS
-                account_value = account.unit_balance * unit_price * account.exchange_rate
-                logging.info("{} is currently worth AUD ${}".format(account.name, account_value))
-                account.current_value = account_value
-
-    def update_account_balance(self, correct_thresh):
-        session = BudgetSession(self.config['YNAB']['API_token'])
-        logging.info("Making account corrections to update value")
-        for account in self.security_account_list:
-            correction = account.current_value-account.balance
-            if abs(correction) > correct_thresh:
-                txn_json = session.construct_value_update_txn(account.account_id, correction, account.inst_id)
-                session.send_transaction_to_YNAB(self.budget_id, account.account_id, txn_json)
-            else:
-                logging.info("Value of {} has not changed by more than {}".format(account.name, correct_thresh))
+    def ynab_value(self, at_date):
+        """finds ynab cash account value at date"""
+        return sum(txn.amount for txn in self.value_list
+                   if txn.date <= at_date)
 
 
-class AlphaVantage:
-    def __init__(self, config):
-        self.apikey = config['ALPHA VANTAGE']['API_token']
+class Evaluation:
 
-    def find_unit_price(self, symbol):
-        url = "https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={0}&apikey={1}".format(symbol, self.apikey)
+    def __init__(self, av_key):
+        self.av_key = av_key
+
+    def av_unit_price(self, symbol, at_date):
+        """Uses AlphaVantage to find the unit price of a symbol at a date"""
+        url = "https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&"\
+              "outputsize=full&symbol={0}&apikey={1}"\
+              .format(symbol, self.av_key)
         r = requests.get(url)
-        r_dict = json.loads(r.text)
-        try:
-            time_series = r_dict["Time Series (Daily)"]
-            most_recent = next(iter(time_series))
-            unit_price = float(time_series[most_recent]['4. close'])
-        except Exception as e:
-            logging.error("Invalid API call. Either symbol ({}) is wrong or key expired, {}".format(symbol, e))
-            sys.exit(1)
-        return unit_price
+        time_series = json.loads(r.text)["Time Series (Daily)"]
+        check_date_strings = [(at_date-tdelta(days=1)).strftime("%Y-%m-%d"),
+                              (at_date+tdelta(days=1)).strftime("%Y-%m-%d"),
+                              at_date.strftime("%Y-%m-%d")]
+        for check_date in check_date_strings:
+            try:
+                unit_price = time_series[check_date]['4. close']
+            except:
+                pass
+        logging.debug("Unit price for {} on {} is ${} (using AlphaVantage)"
+                      .format(symbol, at_date, unit_price))
+        return float(unit_price)
 
-    def find_exchange_rate(self, from_currency, to_currency):
-        url = "https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency={}&to_currency={}&apikey={}".format(from_currency, to_currency, self.apikey)
-        r = requests.get(url)
-        r_dict = json.loads(r.text)
-        try:
-            exchange_rate = r_dict["Realtime Currency Exchange Rate"]["5. Exchange Rate"]
-        except Exception as e:
-            logging.error("Invalid API call {}".format(e))
-            sys.exit(1)
+    def xrate_to_aud(self, at_date, from_currency):
+        """Uses AlphaVantage to find X rate from currency to AUD on date"""
+        if from_currency == "AUD":
+            exchange_rate = 1
+        else:
+            url = "https://www.alphavantage.co/query?function=FX_DAILY&"\
+                  "from_symbol={}&to_symbol=AUD&outputsize=full&apikey={}"\
+                  .format(from_currency, self.av_key)
+            fail = True
+            attempt = 0
+            while (fail is True) and (attempt <= 5):
+                try:
+                    r = requests.get(url)
+                    logging.debug(r.status_code)
+                    time_series = json.loads(r.text)["Time Series FX (Daily)"]
+                    fail = False
+                    logging.info("Time series retreival was successful")
+                except:
+                    fail = True
+                    time.sleep(5)
+                    attempt += 1
+                    logging.warning("Time series unsuccessful. Attempt {}"
+                                    .format(attempt))
+            check_date_strings = [(at_date-tdelta(days=1)).strftime("%Y-%m-%d"),
+                                  (at_date+tdelta(days=1)).strftime("%Y-%m-%d"),
+                                   at_date.strftime("%Y-%m-%d")]
+            for check_date in check_date_strings:
+                try:
+                    exchange_rate = time_series[check_date]['4. close']
+                except:
+                    pass
+        logging.debug("Exchange rate from {} to AUD on {} is {}"
+                      .format(from_currency, at_date, exchange_rate))
         return float(exchange_rate)
 
-def find_unit_price(fund_number):
-    url = "https://www.morningstar.com.au/Funds/FundReport/{0}".format(fund_number)
-    tables = pd.read_html(url) # Returns list of all tables on page
-    quickstats = tables[5] # Select table of interest
-    close_price = float(quickstats[1][5])
+    def ms_unit_price_now(self, fund_number):
+        # TODO Review, docstring, tidy
+        url = "https://www.morningstar.com.au/Funds/FundReport/{0}"\
+              .format(fund_number)
+        tables = pd.read_html(url)
+        quickstats = tables[5]
+        close_price = float(quickstats[1][5])
 
-    return close_price
+        return close_price
+
+    def fortunaoz_unit_price_now():
+        # TODO Review, docstring, tidy
+        header = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"
+                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.75"
+                  "Safari/537.36", "X-Requested-With": "XMLHttpRequest"}
+        url = "https://www.australianbullioncompany.com.au/todays-prices/"
+        r = requests.get(url, headers=header)
+        tables = pd.read_html(r.text)
+        pamp_table = tables[1]
+        fort_buy_price = float(pamp_table['Buy Back'][8][1:].replace(',', ''))
+        return fort_buy_price
+
+
+class Transaction:
+    def __init__(self, txn_id, date, amount, memo):
+        self.txn_id = txn_id
+        self.date = date
+        self.amount = float(amount)
+        self.memo = memo
+
+    def __repr__(self):
+        return "Transaction for ${}({})".format(self.amount, self.date)
+
+
+class Order(Transaction):
+
+    def __init__(self, txn_id, date, amount, memo, action, units, price):
+        super().__init__(txn_id, date, amount, memo)
+        self.action = action
+        self.units = units
+        self.price = price
+
+    def __repr__(self):
+        return "{} order for {} units (at ${}/unit)".format(self.action,
+                                                            self.units,
+                                                            self.price)
+
+
+class Distribution(Transaction):
+    def __init__(self, txn_id, date, amount, memo, action, units, price):
+        super().__init__(txn_id, date, amount, memo)
+        logging.debug("Creating transaction: ", self.__dict__)

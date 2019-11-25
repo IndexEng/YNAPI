@@ -61,7 +61,6 @@ class BudgetSession():
             logging.error("Something went wrong accessing the YNAB API, coded")
             sys.exit(1)
         ynab_txn_dict_list = json.loads(r.text)['data']['transactions']
-        logging.debug(ynab_txn_dict_list)
         return ynab_txn_dict_list
 
 
