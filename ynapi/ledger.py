@@ -6,6 +6,7 @@ import locale
 import requests
 import pandas as pd
 import time
+import sys
 from ynapi.ynapi import BudgetSession
 locale.setlocale(locale.LC_ALL, '')
 
@@ -18,6 +19,7 @@ locale.setlocale(locale.LC_ALL, '')
 class Book:
 
     def __init__(self, ynab_api_token, av_key, budget_id, auto_populate=True):
+        # TODO valuator vs unit evaluator is confusing
         self.budget_id = budget_id
         self.session = BudgetSession(ynab_api_token)
         self.unit_evaluator = Evaluation(av_key)
@@ -40,7 +42,7 @@ class Book:
         if meta['asset'] == "cash":
             acct_instance = Cash(account_json['id'], account_json['name'],
                                  meta['asset'], meta['cls'],
-                                 meta['inst'], meta['acct_no'],
+                                 meta['inst_id'], meta['acct_no'],
                                  meta['country'], meta['currency'],
                                  float(account_json['balance'])/1000,
                                  meta['bsb'])
@@ -49,7 +51,7 @@ class Book:
         elif meta['asset'] == "sec":
             acct_instance = Security(account_json['id'], account_json['name'],
                                      meta['asset'], meta['cls'],
-                                     meta['inst'], meta['acct_no'],
+                                     meta['inst_id'], meta['acct_no'],
                                      meta['country'], meta['currency'],
                                      float(account_json['balance'])/1000,
                                      meta['HIN'], meta['symbol'],
@@ -86,7 +88,6 @@ class Book:
                 alloc_perc_dict[asset] = round(allocation/total,2)
         return alloc_perc_dict
 
-
     def net_worth(self, at_date):
         networth = 0
         asset_allocation = self.asset_allocation(at_date, 'cls')
@@ -94,6 +95,20 @@ class Book:
             if asset != "Allocated":
                 networth += allocation
         return networth
+
+    def update_sec_todayvalue_on_ynab(self, correct_thresh):
+        logging.info("Making account corrections to update value")
+        for account in self.account_list:
+            if account.__class__.__name__ == "Security":
+                today = datetime.now()
+                actual_today = account.holdings_value_today(self.unit_evaluator)
+                ynab_today = account.ynab_value(today)
+                correction = actual_today - ynab_today
+                if abs(correction) > correct_thresh:
+                    txn_json = self.session.construct_value_update_txn(
+                        account.acct_id, correction,
+                        account.inst)
+                    self.session.send_transaction_to_YNAB(self.budget_id, account.acct_id, txn_json)
 
 
 class Account:
@@ -198,18 +213,23 @@ class Security(Account):
 
     def unit_price_aud(self, at_date, unit_evaluator):
         """Calculate security unit price on a given date in AUD"""
+        # TODO fix morning star evaluator to work for any date
         exchange_rate = unit_evaluator.xrate_to_aud(at_date, self.currency)
         if self.valuator == 'AV':
             unit_price = unit_evaluator.av_unit_price(self.symbol, at_date)
         elif self.valuator == 'MS':
-            unit_price = unit_evaluator.av_unit_price(self.symbol, at_date)
+            logging.warning("Unit price retrieved for today only!")
+            unit_price = unit_evaluator.ms_unit_price_now(self.symbol)
         elif self.valuator == 'ABC':
             # TODO Write ABC valuator
-            pass
-
-        logging.debug("Price for a unit of {} is ${}({}) or AUD${}"
-                      .format(self.symbol, unit_price, self.currency,
-                              (exchange_rate * unit_price)))
+            unit_price = 2100
+        try:
+            logging.debug("Price for a unit of {} is ${}({}) or ${}(AUD)"
+                          .format(self.symbol, unit_price, self.currency,
+                                  (exchange_rate * unit_price)))
+        except:
+            logging.error("Unit price not located for {}".format(self.name))
+            sys.exit(1)
         return exchange_rate*unit_price
 
     def populate_value_list(self, session, budget_id):
@@ -231,6 +251,12 @@ class Security(Account):
         return sum(txn.amount for txn in self.value_list
                    if txn.date <= at_date)
 
+    def holdings_value_today(self, unit_evaluator):
+        today = datetime.now()
+        unit_balance = self.unit_balance(today)
+        unit_price_aud = self.unit_price_aud(today, unit_evaluator)
+        return unit_balance * unit_price_aud
+
 
 class Evaluation:
 
@@ -238,26 +264,47 @@ class Evaluation:
         self.av_key = av_key
 
     def av_unit_price(self, symbol, at_date):
+        # TODO improve error handling
+        # TODO improve multiple attempt failure handling
         """Uses AlphaVantage to find the unit price of a symbol at a date"""
+
         url = "https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&"\
               "outputsize=full&symbol={0}&apikey={1}"\
               .format(symbol, self.av_key)
-        r = requests.get(url)
-        time_series = json.loads(r.text)["Time Series (Daily)"]
-        check_date_strings = [(at_date-tdelta(days=1)).strftime("%Y-%m-%d"),
-                              (at_date+tdelta(days=1)).strftime("%Y-%m-%d"),
-                              at_date.strftime("%Y-%m-%d")]
+        fail = True
+        attempt = 0
+        while (fail is True) and (attempt < 10):
+            try:
+                r = requests.get(url)
+                time_series = json.loads(r.text)["Time Series (Daily)"]
+                fail = False
+                logging.info("Time series retreival was successful")
+            except:
+                fail = True
+                time.sleep(10)
+                attempt += 1
+                logging.warning("Time series unsuccessful. Attempt {}"
+                                .format(attempt))
+            check_date_strings = [(at_date-tdelta(days=1)).strftime("%Y-%m-%d"),
+                                  (at_date+tdelta(days=1)).strftime("%Y-%m-%d"),
+                                  at_date.strftime("%Y-%m-%d")]
         for check_date in check_date_strings:
             try:
                 unit_price = time_series[check_date]['4. close']
             except:
                 pass
-        logging.debug("Unit price for {} on {} is ${} (using AlphaVantage)"
-                      .format(symbol, at_date, unit_price))
+        try:
+            logging.debug("Unit price for {} on {} is ${} (using AlphaVantage)"
+                          .format(symbol, at_date, unit_price))
+        except:
+            logging.error("Unit price not located for {}".format(self.name))
+            sys.exit(1)
+
         return float(unit_price)
 
     def xrate_to_aud(self, at_date, from_currency):
         """Uses AlphaVantage to find X rate from currency to AUD on date"""
+        # TODO Find more elegant solution than wait 15 seconds
         if from_currency == "AUD":
             exchange_rate = 1
         else:
@@ -266,16 +313,15 @@ class Evaluation:
                   .format(from_currency, self.av_key)
             fail = True
             attempt = 0
-            while (fail is True) and (attempt <= 5):
+            while (fail is True) and (attempt < 10):
                 try:
                     r = requests.get(url)
-                    logging.debug(r.status_code)
                     time_series = json.loads(r.text)["Time Series FX (Daily)"]
                     fail = False
                     logging.info("Time series retreival was successful")
                 except:
                     fail = True
-                    time.sleep(5)
+                    time.sleep(10)
                     attempt += 1
                     logging.warning("Time series unsuccessful. Attempt {}"
                                     .format(attempt))

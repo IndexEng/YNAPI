@@ -61,7 +61,13 @@ class TestStringMethods(unittest.TestCase):
         at_date = datetime(2019, 9, 30)
         networth = self.ledger.net_worth(at_date)
         logging.info("Net worth at {} is {}".format(at_date, networth))
-        self.assertEqual(round(networth,2), 331280.16)
+        self.assertEqual(round(networth, 2), 331280.16)
+
+    def test_holdings_value_today(self):
+        self.ledger.account_list[9].holdings_value_today(self.ledger.unit_evaluator)
+
+    def test_update_sec_todayvalue_on_ynab(self):
+        self.ledger.update_sec_todayvalue_on_ynab(100)
 
 if __name__ == '__main__':
     unittest.main()
