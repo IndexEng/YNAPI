@@ -11,9 +11,7 @@ from ynapi.ynapi import BudgetSession
 locale.setlocale(locale.LC_ALL, '')
 
 # TODO Calculate value of account at a particular date
-# TODO Evaluate each account for all dates and create corrective transactions
 # TODO Create a value history for each account by date
-# TODO Evaluate security account value at a given date
 
 
 class Book:
@@ -85,7 +83,7 @@ class Book:
         alloc_perc_dict = {}
         for asset, allocation in allocation_dict.items():
             if asset != "Allocated":
-                alloc_perc_dict[asset] = round(allocation/total,2)
+                alloc_perc_dict[asset] = round(allocation/total, 2)
         return alloc_perc_dict
 
     def net_worth(self, at_date):
@@ -214,6 +212,7 @@ class Security(Account):
     def unit_price_aud(self, at_date, unit_evaluator):
         """Calculate security unit price on a given date in AUD"""
         # TODO fix morning star evaluator to work for any date
+        # TODO Error handling if valuator is wrong or doesnt exist
         exchange_rate = unit_evaluator.xrate_to_aud(at_date, self.currency)
         if self.valuator == 'AV':
             unit_price = unit_evaluator.av_unit_price(self.symbol, at_date)
@@ -285,19 +284,23 @@ class Evaluation:
                 attempt += 1
                 logging.warning("Time series unsuccessful. Attempt {}"
                                 .format(attempt))
-            check_date_strings = [(at_date-tdelta(days=1)).strftime("%Y-%m-%d"),
+            check_date_strings = [(at_date-tdelta(days=3)).strftime("%Y-%m-%d"),
+                                  (at_date-tdelta(days=2)).strftime("%Y-%m-%d"),
+                                  (at_date-tdelta(days=1)).strftime("%Y-%m-%d"),
                                   (at_date+tdelta(days=1)).strftime("%Y-%m-%d"),
                                   at_date.strftime("%Y-%m-%d")]
         for check_date in check_date_strings:
             try:
                 unit_price = time_series[check_date]['4. close']
-            except:
-                pass
+            except Exception as e:
+                logging.warning("Unit price not recorded for {}"
+                                .format(check_date))
+                logging.error(e)
         try:
             logging.debug("Unit price for {} on {} is ${} (using AlphaVantage)"
                           .format(symbol, at_date, unit_price))
         except:
-            logging.error("Unit price not located for {}".format(self.name))
+            logging.error("Unit price not located for {}".format(symbol))
             sys.exit(1)
 
         return float(unit_price)

@@ -26,11 +26,10 @@ class TestStringMethods(unittest.TestCase):
         cls.ledger = Book(ynab_api_token, av_key, cls.budget_id)
 
     def test_av_unit_price(self):
-        unit_price = float(self.value.av_unit_price('AAPL', datetime(2019, 2, 12)))
-        self.assertEqual(unit_price, 170.89)
+        unit_price = float(self.value.av_unit_price('AAPL', datetime(2019, 9, 30)))
+        self.assertEqual(unit_price, 223.97)
 
     def test_xrate(self):
-
         at_date = datetime(2019, 2, 12)
         currency_list = ["USD", "NZD", "AUD"]
         for currency in currency_list:
@@ -38,7 +37,7 @@ class TestStringMethods(unittest.TestCase):
 
     def test_ynab_cash_value(self):
         at_date = datetime(2019, 10, 15)
-        target_balance_at_date = 57075.91
+        target_balance_at_date = -0.0
         # TODO Make so it finds Invested Saver without index
         balance_at_date = self.ledger.account_list[12].ynab_value(at_date)
         self.assertEqual(round(balance_at_date, 2), target_balance_at_date)
@@ -67,7 +66,7 @@ class TestStringMethods(unittest.TestCase):
         self.ledger.account_list[9].holdings_value_today(self.ledger.unit_evaluator)
 
     def test_update_sec_todayvalue_on_ynab(self):
-        self.ledger.update_sec_todayvalue_on_ynab(100)
+        self.ledger.update_sec_todayvalue_on_ynab(1)
 
 if __name__ == '__main__':
     unittest.main()
